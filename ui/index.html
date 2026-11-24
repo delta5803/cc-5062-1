@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>压感笔迹画板</title>
+<style>
+  body { margin: 0; font: 13px/1.5 system-ui, sans-serif; background: #2b2b2e; color: #ddd; display: flex; height: 100vh; }
+  #stage { flex: 1; display: flex; align-items: center; justify-content: center; position: relative; }
+  #paper { position: relative; width: 960px; height: 640px; box-shadow: 0 4px 24px #0008; }
+  #paper canvas { position: absolute; inset: 0; width: 960px; height: 640px; }
+  #ink { background: #f5f3ec; }
+  #overlay { pointer-events: none; }
+  #panel { width: 280px; padding: 12px; overflow-y: auto; background: #36363a; }
+  #panel h2 { font-size: 14px; margin: 4px 0 10px; }
+  #panel label { display: block; margin: 8px 0 2px; color: #aaa; }
+  #panel input[type=range] { width: 100%; }
+  #panel select, #panel button { width: 100%; margin: 4px 0; padding: 6px; background: #4a4a50; color: #eee; border: 1px solid #555; border-radius: 4px; }
+  #panel button:hover { background: #5a5a62; }
+  .row { display: flex; gap: 6px; }
+  .row button { flex: 1; }
+  #stats { white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 12px; background: #2b2b2e; padding: 8px; border-radius: 4px; margin-top: 10px; }
+  #err { display: none; background: #7a2d2d; color: #ffd7d7; padding: 6px 8px; border-radius: 4px; margin-top: 8px; }
+  .chk { display: flex; align-items: center; gap: 6px; margin: 6px 0; color: #aaa; }
+  .chk input { width: auto; }
+  #hint { color: #888; margin-top: 8px; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="paper">
+    <canvas id="ink" width="960" height="640"></canvas>
+    <canvas id="overlay" width="960" height="640"></canvas>
+  </div>
+</div>
+<div id="panel">
+  <h2>压感笔迹画板</h2>
+  <label>笔尖最大直径 <span id="v-maxSize"></span></label>
+  <input type="range" id="maxSize" min="4" max="60" step="1">
+  <label>间距比(直径分数) <span id="v-spacingRatio"></span></label>
+  <input type="range" id="spacingRatio" min="0.1" max="0.8" step="0.05">
+  <label>单次盖印不透明度 <span id="v-flow"></span></label>
+  <input type="range" id="flow" min="0.05" max="1" step="0.05">
+  <label>边缘硬度 <span id="v-hardness"></span></label>
+  <input type="range" id="hardness" min="0" max="0.95" step="0.05">
+  <label>椭圆扁率 <span id="v-eccentricity"></span></label>
+  <input type="range" id="eccentricity" min="0" max="0.9" step="0.05">
+  <label>旋转模型</label>
+  <select id="rotationMode">
+    <option value="tilt">随倾斜</option>
+    <option value="direction">随行笔方向</option>
+    <option value="fixed">固定</option>
+  </select>
+  <label>断笔判定时间(ms) <span id="v-gapTimeMs"></span></label>
+  <input type="range" id="gapTimeMs" min="30" max="500" step="10">
+  <label>鼠标模拟压力(无压感笔时) <span id="v-mousePressure"></span></label>
+  <input type="range" id="mousePressure" min="0.05" max="1" step="0.05">
+  <div class="chk"><input type="checkbox" id="showSamples" checked><label for="showSamples">采样点(红)</label></div>
+  <div class="chk"><input type="checkbox" id="showDabs" checked><label for="showDabs">盖印中心(蓝)</label></div>
+  <div class="chk"><input type="checkbox" id="showPath" checked><label for="showPath">采样轨迹连线(绿)</label></div>
+  <label>重放采样频率</label>
+  <select id="replayRate">
+    <option value="30">30 Hz</option>
+    <option value="60">60 Hz</option>
+    <option value="120" selected>120 Hz</option>
+    <option value="240">240 Hz</option>
+  </select>
+  <div class="row">
+    <button id="replay">重放固定轨迹</button>
+    <button id="clear">清空</button>
+  </div>
+  <button id="export">导出 PNG</button>
+  <div id="err"></div>
+  <div id="stats"></div>
+  <div id="hint">在画布上拖动即可作画。压感笔使用真实压力/倾斜; 鼠标用上方滑块调压。重放使用与测试相同的固定轨迹, 可对照不同采样频率下的笔迹一致性。</div>
+</div>
+<script type="module" src="./ui.js"></script>
+</body>
+</html>
