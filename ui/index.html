@@ -20,6 +20,11 @@
   .row button { flex: 1; }
   #stats { white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 12px; background: #2b2b2e; padding: 8px; border-radius: 4px; margin-top: 10px; }
   #err { display: none; background: #7a2d2d; color: #ffd7d7; padding: 6px 8px; border-radius: 4px; margin-top: 8px; }
+  #acceptance { display: none; white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 12px; padding: 8px; border-radius: 4px; margin-top: 8px; background: #2b2b2e; color: #d8e8ff; }
+  #acceptance.ok { background: #214d2b; color: #d9ffe0; }
+  #acceptance.error { background: #6e2424; color: #ffe0e0; }
+  #acceptance.warning { background: #6b4d16; color: #fff1c7; }
+  button:disabled { opacity: .45; cursor: default; }
   .chk { display: flex; align-items: center; gap: 6px; margin: 6px 0; color: #aaa; }
   .chk input { width: auto; }
   #hint { color: #888; margin-top: 8px; }
@@ -57,6 +62,12 @@
   <div class="chk"><input type="checkbox" id="showSamples" checked><label for="showSamples">采样点(红)</label></div>
   <div class="chk"><input type="checkbox" id="showDabs" checked><label for="showDabs">盖印中心(蓝)</label></div>
   <div class="chk"><input type="checkbox" id="showPath" checked><label for="showPath">采样轨迹连线(绿)</label></div>
+  <label>回归样例</label>
+  <select id="caseSelect"></select>
+  <div class="row">
+    <button id="openCase">打开样例</button>
+    <button id="undo" disabled>撤销 (Ctrl/⌘Z)</button>
+  </div>
   <label>重放采样频率</label>
   <select id="replayRate">
     <option value="30">30 Hz</option>
@@ -70,8 +81,9 @@
   </div>
   <button id="export">导出 PNG</button>
   <div id="err"></div>
+  <div id="acceptance"></div>
   <div id="stats"></div>
-  <div id="hint">在画布上拖动即可作画。压感笔使用真实压力/倾斜; 鼠标用上方滑块调压。重放使用与测试相同的固定轨迹, 可对照不同采样频率下的笔迹一致性。</div>
+  <div id="hint">在画布上拖动即可作画；可用鼠标压力滑块，或在运笔时按 [ / ] 调整模拟压力。压感笔使用真实压力/倾斜。打开回归样例可对照真实笔迹、红色采样点、绿色轨迹和蓝色盖印中心；命令行 node test/run-tests.mjs 仅作辅助验收。</div>
 </div>
 <script type="module" src="./ui.js"></script>
 </body>

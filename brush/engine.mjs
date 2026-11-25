@@ -4,6 +4,8 @@
 // 输出: 浮点 RGBA 画布(直Alpha), 每个 dab 记录 {路径时刻 t, 提交时刻 tCommit} 供延迟复算。
 // 保证: 同一事件流按任意批次到达结果逐位一致; 落墨量由弧长决定, 与事件回报频率无关。
 
+import { fingerprintEvent } from './reducer.mjs';
+
 export const DEFAULT_PARAMS = {
   minSize: 2,          // p=0 时笔尖直径(px)
   maxSize: 28,         // p=1 时笔尖直径(px)
@@ -106,12 +108,36 @@ export class BrushEngine {
     validateParams(this.params);
     this.stroke = null;
     this.dabs = []; // 全部已提交 dab: {x,y,t,tCommit,rx,ry,angle,alpha}
-    this.stats = { events: 0, strokes: 0, gaps: 0 };
+    this.stats = { events: 0, duplicates: 0, strokes: 0, gaps: 0 };
     this._commitTime = 0;
   }
 
   diameter(p) { return this.params.minSize + (this.params.maxSize - this.params.minSize) * clamp01(p); }
   spacing(p) { return Math.max(this.params.minSpacing, this.params.spacingRatio * this.diameter(p)); }
+
+  snapshot() {
+    return {
+      canvas: {
+        width: this.canvas.width,
+        height: this.canvas.height,
+        data: new Float32Array(this.canvas.data),
+      },
+      dabs: this.dabs.map(d => ({ ...d })),
+      stats: { ...this.stats },
+      commitTime: this._commitTime,
+    };
+  }
+
+  restore(snapshot) {
+    if (!snapshot || snapshot.canvas.width !== this.canvas.width || snapshot.canvas.height !== this.canvas.height) {
+      throw new Error('撤销快照尺寸不匹配');
+    }
+    this.canvas.data.set(snapshot.canvas.data);
+    this.dabs = snapshot.dabs.map(d => ({ ...d }));
+    this.stats = { ...snapshot.stats };
+    this._commitTime = snapshot.commitTime;
+    this.stroke = null;
+  }
 
   // 当前状态下的椭圆足迹(不改动状态)
   _ellipseFor(p, tx, ty) {
@@ -145,12 +171,14 @@ export class BrushEngine {
 
   beginStroke(e) {
     if (this.stroke) this.endStroke();
+    const fingerprint = fingerprintEvent(e);
     e = normalizeEvent(e);
     this.stats.strokes++;
     this.stats.events++;
     this._commitTime = e.t;
     this.stroke = {
       events: [e],
+      eventKeys: new Set([fingerprint]),
       lastPoint: { ...e },
       distSinceDab: 0,
       spacing: this.spacing(e.p),
@@ -164,8 +192,14 @@ export class BrushEngine {
   pushEvent(raw) {
     if (!this.stroke) { this.beginStroke(raw); return; }
     const st = this.stroke;
-    const e = normalizeEvent(raw, st.events[st.events.length - 1].t);
     this.stats.events++;
+    const fingerprint = fingerprintEvent(raw);
+    if (st.eventKeys.has(fingerprint)) {
+      this.stats.duplicates++;
+      return;
+    }
+    st.eventKeys.add(fingerprint);
+    const e = normalizeEvent(raw, st.events[st.events.length - 1].t);
     const last = st.events[st.events.length - 1];
     const dt = e.t - last.t;
     const dist = Math.hypot(e.x - last.x, e.y - last.y);

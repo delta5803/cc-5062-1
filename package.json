@@ -1,0 +1,13 @@
+{
+  "name": "pressure-stroke-acceptance",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node test/run-tests.mjs && node test/ui-harness.mjs",
+    "test:brush": "node test/run-tests.mjs",
+    "test:ui": "node test/ui-harness.mjs",
+    "acceptance": "node test/run-tests.mjs && node test/ui-harness.mjs",
+    "serve": "python3 -m http.server 8080"
+  }
+}

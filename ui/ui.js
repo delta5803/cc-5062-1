@@ -1,9 +1,11 @@
 import { BrushEngine, createCanvas, DEFAULT_PARAMS } from '../brush/engine.mjs';
-import { findPressurePeaks, analyzeLatency, canvasStats } from '../brush/analysis.mjs';
-import { sampleTrajectory, DEMO_PEAKS, DEMO_DURATION } from '../brush/trajectory.mjs';
+import { analyzeLatency, canvasStats, findPressurePeaks } from '../brush/analysis.mjs';
+import { sampleTrajectory, DEMO_PEAKS } from '../brush/trajectory.mjs';
+import { REGRESSION_CASES } from '../brush/cases.mjs';
+import { composePaperRgba, encodePngRgba } from '../brush/export.mjs';
+import { evaluateLoadedCase, runRegressionCase } from '../brush/acceptance.mjs';
 
 const W = 960, H = 640;
-const PAPER = [0.96, 0.95, 0.92];
 
 const inkCanvas = document.getElementById('ink');
 const inkCtx = inkCanvas.getContext('2d');
@@ -11,6 +13,10 @@ const overlay = document.getElementById('overlay');
 const ovCtx = overlay.getContext('2d');
 const statsEl = document.getElementById('stats');
 const errEl = document.getElementById('err');
+const acceptanceEl = document.getElementById('acceptance');
+const undoBtn = document.getElementById('undo');
+const caseSelect = document.getElementById('caseSelect');
+const openCaseBtn = document.getElementById('openCase');
 
 const ui = {};
 for (const id of ['maxSize', 'spacingRatio', 'flow', 'hardness', 'eccentricity', 'rotationMode',
@@ -18,14 +24,46 @@ for (const id of ['maxSize', 'spacingRatio', 'flow', 'hardness', 'eccentricity',
   ui[id] = document.getElementById(id);
 }
 
+for (const item of REGRESSION_CASES) {
+  const option = document.createElement('option');
+  option.value = item.id;
+  option.textContent = item.label;
+  caseSelect.appendChild(option);
+}
+
+let hiddenParamOverrides = {};
 let canvas = createCanvas(W, H);
 let engine = new BrushEngine(canvas, readParams());
-let samples = [];      // 原始采样点(未平滑), 用于轨迹对照
+let samples = [];
 let drawing = false;
 let replaying = false;
+let history = [];
+let currentCaseId = 'free';
+let lastReduction = null;
+let caseReport = null;
+
+function reportError(err) {
+  console.error(err);
+  errEl.textContent = '压感笔迹界面异常: ' + (err?.message || String(err));
+  errEl.style.display = 'block';
+}
+
+function guard(fn) {
+  return (...args) => {
+    try {
+      return fn(...args);
+    } catch (err) {
+      reportError(err);
+    }
+  };
+}
+
+window.addEventListener('error', event => reportError(event.error || event.message));
+window.addEventListener('unhandledrejection', event => reportError(event.reason));
 
 function readParams() {
   return {
+    ...hiddenParamOverrides,
     maxSize: Number(ui.maxSize.value),
     spacingRatio: Number(ui.spacingRatio.value),
     flow: Number(ui.flow.value),
@@ -36,6 +74,21 @@ function readParams() {
   };
 }
 
+function updateValueLabel(id) {
+  const span = document.getElementById('v-' + id);
+  if (span && ui[id]) span.textContent = ` (${ui[id].value})`;
+}
+
+function setControlValues(params) {
+  for (const id of ['maxSize', 'spacingRatio', 'flow', 'hardness', 'eccentricity', 'gapTimeMs']) {
+    if (params[id] !== undefined) ui[id].value = params[id];
+    updateValueLabel(id);
+  }
+  if (params.rotationMode) ui.rotationMode.value = params.rotationMode;
+  if (params.mousePressure !== undefined) ui.mousePressure.value = params.mousePressure;
+  updateValueLabel('mousePressure');
+}
+
 function applyParams() {
   try {
     const p = { ...DEFAULT_PARAMS, ...readParams() };
@@ -43,38 +96,25 @@ function applyParams() {
     engine.params = test.params;
     errEl.style.display = 'none';
   } catch (err) {
-    errEl.textContent = '参数被拒绝: ' + err.message; // 失败反馈回界面, 笔迹保持上一组合法参数
-    errEl.style.display = 'block';
+    reportError(err);
   }
 }
 
 function initControls() {
-  ui.maxSize.value = DEFAULT_PARAMS.maxSize;
-  ui.spacingRatio.value = DEFAULT_PARAMS.spacingRatio;
-  ui.flow.value = DEFAULT_PARAMS.flow;
-  ui.hardness.value = DEFAULT_PARAMS.hardness;
-  ui.eccentricity.value = DEFAULT_PARAMS.eccentricity;
-  ui.gapTimeMs.value = DEFAULT_PARAMS.gapTimeMs;
+  setControlValues(DEFAULT_PARAMS);
   ui.mousePressure.value = 0.5;
+  updateValueLabel('mousePressure');
   for (const id of ['maxSize', 'spacingRatio', 'flow', 'hardness', 'eccentricity', 'gapTimeMs', 'mousePressure']) {
-    const span = document.getElementById('v-' + id);
-    const show = () => { span.textContent = ` (${ui[id].value})`; };
-    ui[id].addEventListener('input', () => { show(); applyParams(); });
-    show();
+    ui[id].addEventListener('input', guard(() => {
+      updateValueLabel(id);
+      applyParams();
+    }));
   }
-  ui.rotationMode.addEventListener('change', applyParams);
+  ui.rotationMode.addEventListener('change', guard(applyParams));
 }
 
 function blit() {
-  const img = inkCtx.createImageData(W, H);
-  const d = canvas.data, o = img.data;
-  for (let i = 0; i < W * H; i++) {
-    const a = d[i * 4 + 3];
-    o[i * 4] = (d[i * 4] * a + PAPER[0] * (1 - a)) * 255;
-    o[i * 4 + 1] = (d[i * 4 + 1] * a + PAPER[1] * (1 - a)) * 255;
-    o[i * 4 + 2] = (d[i * 4 + 2] * a + PAPER[2] * (1 - a)) * 255;
-    o[i * 4 + 3] = 255;
-  }
+  const img = new ImageData(composePaperRgba(canvas), W, H);
   inkCtx.putImageData(img, 0, 0);
 }
 
@@ -112,16 +152,74 @@ function refreshStats(extra = '') {
   const ink = canvasStats(canvas);
   const lat = analyzeLatency(engine.dabs);
   statsEl.textContent =
-    `事件 ${st.events}  笔划 ${st.strokes}  断笔 ${st.gaps}\n` +
+    `事件 ${st.events}  重复 ${st.duplicates}  笔划 ${st.strokes}  断笔 ${st.gaps}\n` +
     `盖印 ${engine.dabs.length}  总墨量 ${ink.ink.toFixed(0)}\n` +
-    `落笔延迟 mean ${lat.mean.toFixed(1)}ms  max ${lat.max.toFixed(1)}ms\n` + extra;
+    `落笔延迟 mean ${lat.mean.toFixed(1)}ms max ${lat.max.toFixed(1)}ms\n` + extra;
+}
+
+function renderAcceptance() {
+  if (!caseReport) {
+    acceptanceEl.style.display = 'none';
+    acceptanceEl.textContent = '';
+    acceptanceEl.className = '';
+    return;
+  }
+  const status = caseReport.ok ? '[通过]' : caseReport.tone === 'warning' ? '[定位]' : '[失败]';
+  acceptanceEl.className = caseReport.tone === 'ok' ? 'report ok' : `report ${caseReport.tone || 'error'}`;
+  acceptanceEl.textContent = `${status} ${caseReport.title}\n${caseReport.lines.join('\n')}`;
+  acceptanceEl.style.display = 'block';
 }
 
 function refresh(extra) {
   blit();
   drawOverlay();
   refreshStats(extra);
+  renderAcceptance();
+  undoBtn.disabled = history.length === 0 || replaying;
 }
+
+// ---- 撤销: 同时恢复像素、dabs、统计和界面采样点 ----
+function pushHistory() {
+  history.push({
+    snapshot: engine.snapshot(),
+    params: { ...engine.params, color: [...engine.params.color] },
+    samples: samples.map(e => ({ ...e })),
+    caseId: currentCaseId,
+    reduction: lastReduction,
+  });
+  if (history.length > 30) history.shift();
+  undoBtn.disabled = false;
+}
+
+function undo() {
+  const entry = history.pop();
+  if (!entry) return;
+  canvas = createCanvas(W, H);
+  engine = new BrushEngine(canvas, entry.params);
+  engine.restore(entry.snapshot);
+  samples = entry.samples.map(e => ({ ...e }));
+  currentCaseId = entry.caseId || 'free';
+  lastReduction = entry.reduction || null;
+  caseReport = currentCaseId.startsWith('handwritten') || ['hold', 'pressure-jump', 'demo'].includes(currentCaseId)
+    ? evaluateLoadedCase(currentCaseId, { engine, canvas, reduction: lastReduction })
+    : null;
+  refresh('已撤销上一笔/载入');
+}
+undoBtn.addEventListener('click', guard(undo));
+window.addEventListener('keydown', guard(event => {
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {
+    event.preventDefault();
+    undo();
+    return;
+  }
+  if (event.key === '[' || event.key === ']') {
+    const current = Number(ui.mousePressure.value);
+    const next = Math.min(1, Math.max(0.05, current + (event.key === ']' ? 0.05 : -0.05)));
+    ui.mousePressure.value = next.toFixed(2);
+    updateValueLabel('mousePressure');
+    refreshStats(`鼠标模拟压力已调为 ${next.toFixed(2)}；继续拖动画笔即可看到压力响应`);
+  }
+}));
 
 // ---- 输入: 事件 -> 内核, 显示位置不做任何平滑/预测 ----
 function toEvent(e) {
@@ -137,17 +235,20 @@ function toEvent(e) {
   };
 }
 
-inkCanvas.addEventListener('pointerdown', e => {
+inkCanvas.addEventListener('pointerdown', guard(e => {
   if (replaying) return;
+  pushHistory();
+  currentCaseId = 'free';
+  caseReport = null;
   inkCanvas.setPointerCapture(e.pointerId);
   drawing = true;
   const ev = toEvent(e);
   samples.push(ev);
   engine.beginStroke(ev);
   refresh();
-});
+}));
 
-inkCanvas.addEventListener('pointermove', e => {
+inkCanvas.addEventListener('pointermove', guard(e => {
   if (!drawing || replaying) return;
   const list = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
   for (const ce of list) {
@@ -156,7 +257,7 @@ inkCanvas.addEventListener('pointermove', e => {
     engine.pushEvent(ev);
   }
   refresh();
-});
+}));
 
 function endStroke(e) {
   if (!drawing) return;
@@ -170,13 +271,49 @@ function endStroke(e) {
   }
   refresh();
 }
-inkCanvas.addEventListener('pointerup', endStroke);
-inkCanvas.addEventListener('pointercancel', () => endStroke(null));
+inkCanvas.addEventListener('pointerup', guard(endStroke));
+inkCanvas.addEventListener('pointercancel', guard(() => endStroke(null)));
+
+function clearAll() {
+  hiddenParamOverrides = {};
+  canvas = createCanvas(W, H);
+  engine = new BrushEngine(canvas, readParams());
+  samples = [];
+  currentCaseId = 'free';
+  lastReduction = null;
+  caseReport = null;
+  refresh();
+}
+document.getElementById('clear').addEventListener('click', guard(() => {
+  pushHistory();
+  clearAll();
+}));
+
+// ---- 回归样例: 与命令行验收共用同一运行器 ----
+function loadCase(id) {
+  const runtime = runRegressionCase(id, { width: W, height: H });
+  hiddenParamOverrides = runtime.params.minSize !== undefined ? { minSize: runtime.params.minSize } : {};
+  setControlValues({ ...DEFAULT_PARAMS, ...runtime.params });
+  canvas = runtime.canvas;
+  engine = runtime.engine;
+  currentCaseId = id;
+  samples = runtime.events.map(e => ({ ...e }));
+  lastReduction = runtime.reduction;
+  caseReport = evaluateLoadedCase(id, { engine, canvas, reduction: lastReduction });
+  refresh(`已从绘画窗口打开回归样例: ${caseSelect.selectedOptions[0]?.textContent || id}`);
+}
+
+openCaseBtn.addEventListener('click', guard(() => {
+  pushHistory();
+  loadCase(caseSelect.value);
+}));
 
 // ---- 重放固定输入: 与测试共用同一条连续轨迹 ----
-document.getElementById('replay').addEventListener('click', () => {
+document.getElementById('replay').addEventListener('click', guard(() => {
   if (replaying) return;
+  pushHistory();
   clearAll();
+  currentCaseId = 'demo';
   replaying = true;
   const rate = Number(ui.replayRate.value);
   const events = sampleTrajectory(rate);
@@ -186,52 +323,55 @@ document.getElementById('replay').addEventListener('click', () => {
   samples.push(events[0]);
   i = 1;
   const tick = () => {
-    const elapsed = performance.now() - t0;
-    while (i < events.length && events[i].t <= elapsed) {
-      samples.push(events[i]);
-      engine.pushEvent(events[i]);
-      i++;
-    }
-    refresh();
-    if (i < events.length) {
-      requestAnimationFrame(tick);
-    } else {
-      engine.endStroke();
+    try {
+      const elapsed = performance.now() - t0;
+      while (i < events.length && events[i].t <= elapsed) {
+        samples.push(events[i]);
+        engine.pushEvent(events[i]);
+        i++;
+      }
+      refresh();
+      if (i < events.length) {
+        requestAnimationFrame(tick);
+      } else {
+        engine.endStroke();
+        replaying = false;
+        const peaks = findPressurePeaks(events, { minProminence: 0.3 });
+        const lat = analyzeLatency(engine.dabs);
+        caseReport = evaluateLoadedCase('demo', { engine, canvas });
+        refresh(
+          `重放 ${rate}Hz 共 ${events.length} 事件\n` +
+          `压力峰: 期望 ${DEMO_PEAKS.join('/')}ms, 检出 ${peaks.map(p => p.t.toFixed(0)).join('/') || '无'}ms\n` +
+          `延迟 mean ${lat.mean.toFixed(1)}ms max ${lat.max.toFixed(1)}ms (采样间隔 ${(1000 / rate).toFixed(1)}ms)`
+        );
+      }
+    } catch (err) {
       replaying = false;
-      const peaks = findPressurePeaks(events, { minProminence: 0.3 });
-      const lat = analyzeLatency(engine.dabs);
-      refresh(
-        `重放 ${rate}Hz 共 ${events.length} 事件\n` +
-        `压力峰: 期望 ${DEMO_PEAKS.join('/')}ms, 检出 ${peaks.map(p => p.t.toFixed(0)).join('/') || '无'}ms\n` +
-        `延迟: mean ${lat.mean.toFixed(1)}ms max ${lat.max.toFixed(1)}ms (采样间隔 ${(1000 / rate).toFixed(1)}ms)`
-      );
+      reportError(err);
+      refresh();
     }
   };
   requestAnimationFrame(tick);
-});
+}));
 
-function clearAll() {
-  canvas = createCanvas(W, H);
-  engine = new BrushEngine(canvas, readParams());
-  applyParams();
-  samples = [];
-  refresh();
-}
-document.getElementById('clear').addEventListener('click', clearAll);
-
-document.getElementById('export').addEventListener('click', () => {
-  inkCanvas.toBlob(blob => {
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = 'stroke.png';
-    a.click();
-    URL.revokeObjectURL(a.href);
-  });
-});
+document.getElementById('export').addEventListener('click', guard(() => {
+  const png = encodePngRgba(composePaperRgba(canvas), W, H);
+  const blob = new Blob([png], { type: 'image/png' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'pressure-stroke.png';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  refresh(`已导出 PNG：${png.length} 字节`);
+}));
 
 for (const id of ['showSamples', 'showDabs', 'showPath']) {
-  ui[id].addEventListener('change', () => refresh());
+  ui[id].addEventListener('change', guard(() => refresh()));
 }
 
 initControls();
+applyParams();
 refresh();

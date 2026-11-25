@@ -2,6 +2,7 @@
 import { BrushEngine, createCanvas, stampDab, DEFAULT_PARAMS } from '../brush/engine.mjs';
 import { findPressurePeaks, analyzeLatency, canvasStats, diffCanvases, cloneCanvas } from '../brush/analysis.mjs';
 import { sampleTrajectory, chunk, DEMO_PEAKS, DEMO_DURATION } from '../brush/trajectory.mjs';
+import { runAcceptance } from './acceptance.mjs';
 
 const W = 960, H = 640;
 let passed = 0, failed = 0;
@@ -181,6 +182,8 @@ console.log('\n[8] 急转弯: 转角无洞, 且无异常浓色结块');
   console.log(`  转角峰值=${turnMax.toFixed(3)} 直线峰值=${straightMax.toFixed(3)} 比=${(turnMax / straightMax).toFixed(2)}`);
   check('转角浓度不超过直线段1.35倍', turnMax <= straightMax * 1.35, `${turnMax} vs ${straightMax}`);
 }
+
+runAcceptance(check);
 
 console.log(`\n结果: ${passed} 通过, ${failed} 失败`);
 process.exit(failed ? 1 : 0);
